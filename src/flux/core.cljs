@@ -1,5 +1,7 @@
 (ns flux.core
-  (:require [clojure.browser.repl :as repl]))
+  (:require [cats.core :as m]
+            [clojure.browser.repl :as repl]
+            [cats.monad.maybe :as maybe]))
 
 
 (def store (atom {:listViewA {:page 0 :records []}
@@ -23,6 +25,9 @@
   (action-next-page {:page 0 :records []})
   (action-load-records {:page 0 :records []})
   (swap! store update-in [:listViewA] listview-reducer)
+
+  (def v (m/bind (maybe/just 1) #(m/return (inc %))))
+  @v
 
   )
 
