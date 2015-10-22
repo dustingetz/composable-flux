@@ -1,7 +1,9 @@
 (ns flux.core
   (:require [cats.core :as m]
-            [clojure.browser.repl :as repl]
-            [cats.monad.maybe :as maybe]))
+            [cats.monad.maybe :as maybe]
+            [cats.labs.channel]
+            [cljs.core.async :as a])
+  (:require-macros [cljs.core.async.macros :as a]))
 
 
 (def store (atom {:listViewA {:page 0 :records []}
@@ -16,7 +18,7 @@
   (update-in listview-state [:records] (constantly [1 2 3])))
 
 
-(def listview-reducer (reduce comp [action-next-page action-load-records]))
+(def action-load-next-page (reduce comp [action-next-page action-load-records]))
 
 
 
@@ -24,7 +26,8 @@
 (comment
   (action-next-page {:page 0 :records []})
   (action-load-records {:page 0 :records []})
-  (swap! store update-in [:listViewA] listview-reducer)
+  (action-load-next-page {:page 0 :records []})
+  (swap! store update-in [:listViewA] action-load-next-page)
 
   (def v (m/bind (maybe/just 1) #(m/return (inc %))))
   @v
@@ -33,10 +36,11 @@
 
 
 
-
-;; (defonce conn
-;;   (repl/connect "http://localhost:9000/repl"))
-
-(enable-console-print!)
-
-(println "Hello world!")
+(defn async-call
+  "A function that emulates some asynchronous call."
+  [n]
+  (a/go
+    (println "---> sending request" n)
+    (a/<! (a/timeout n))
+    (println "<--- receiving request" n)
+    n))
