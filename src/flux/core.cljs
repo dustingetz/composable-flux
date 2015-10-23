@@ -1,6 +1,6 @@
 (ns flux.core
   (:require [cats.core :as m]
-            [cats.monad.maybe :as maybe]
+            [cats.monad.identity :as id]
             [cats.labs.channel]
             [cljs.core.async :as a]
             [promesa.core :as p]
@@ -24,8 +24,15 @@
 ;; action returns a loading state
 ;; then returns a state update and disables loading state
 
-(defn >=> [& fs]
-  (apply comp fs))
+;; http://learnyouahaskell.com/a-fistful-of-monads
+;; (<=<) :: (Monad m) => (b -> m c) -> (a -> m b) -> (a -> m c)
+;; f <=< g = (\x -> (g x) >>= f)
+(defn <=< [f g]
+  #(m/bind (g %) f)) ;(comp g f)
+
+
+;; bind will unwrap the f, return will wrap f with a journal
+;; So the inner value is the updater-fn
 
 
 (defn root-at [paths f]
@@ -36,7 +43,7 @@ If this is monadic, unwrap the updater-fn first, and journal that symbol and pat
 
 (def load-records-pending (root-at [:pending] (constantly true)))
 
-(def load-records-success (>=>
+(def load-records-success (comp
                            (root-at [:records] (constantly [1 2 3]))
                            (root-at [:pending] (constantly false))))
 
