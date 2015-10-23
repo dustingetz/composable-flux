@@ -3,39 +3,13 @@
             [cats.monad.maybe :as maybe]
             [cats.labs.channel]
             [cljs.core.async :as a]
-            [promesa.core :as p])
+            [promesa.core :as p]
+            [flux.util :refer [delayed-val]])
   (:require-macros [cljs.core.async.macros :as a]))
 
 
 (def store (atom {:listViewA {:page 0 :records []}
                   :listViewB {:page 0 :records []}}))
-
-
-(defn action-next-page [listview-state]
-  (update-in listview-state [:page] inc))
-
-
-(defn action-load-records [listview-state]
-  (update-in listview-state [:records] (constantly [1 2 3])))
-
-
-(def action-load-next-page (reduce comp [action-next-page action-load-records]))
-
-
-
-
-(comment
-  (action-next-page {:page 0 :records []})
-  (action-load-records {:page 0 :records []})
-  (action-load-next-page {:page 0 :records []})
-  (swap! store update-in [:listViewA] action-load-next-page)
-
-  (def v (m/bind (maybe/just 1) #(m/return (inc %))))
-  @v
-
-  )
-
-
 
 
 ;; An async action has to return a stream of updater fns. The dispatcher at the
@@ -50,24 +24,21 @@
 ;; action returns a loading state
 ;; then returns a state update and disables loading state
 
-
-(defn delayed-val [val]
-  (p/promise (fn [deliver]
-               (js/setTimeout #(deliver val) 10000))))
+(defn >=> [& fs]
+  (apply comp fs))
 
 
-(comment
-  (-> (m/fmap inc (delayed-val 42))
-      (p/then (fn [v]
-                (println v))))
-  )
+(defn root-at [paths f]
+  "Return a new updater-fn that applies f at a path in some bigger context.
+If this is monadic, unwrap the updater-fn first, and journal that symbol and path."
+  #(update-in % paths f))
 
 
-(def load-records-pending #(update-in % [:pending] (constantly true)))
+(def load-records-pending (root-at [:pending] (constantly true)))
 
-(def load-records-success (comp
-                           #(update-in % [:records] (constantly [1 2 3]))
-                           #(update-in % [:pending] (constantly false))))
+(def load-records-success (>=>
+                           (root-at [:records] (constantly [1 2 3]))
+                           (root-at [:pending] (constantly false))))
 
 
 (defn async-component-action []
@@ -82,13 +53,19 @@
     c))
 
 
-(defn refine [paths f]
-  #(update-in % paths f))
+;; writer monad will journal the symbol 'async-component-action,
+;; and if actions are composed, we need to merge it into a tree-like
+;; journal that shows us the composition
+;; So our mjoin is a smart merge on the journal
+;; want to use mappend
+
+
+
 
 
 (comment
-  (def update-fn #(update-in % [:count] inc))
-  (def root-update-fn (refine [:b] update-fn))
+  (def update-fn (root-at [:count] inc))
+  (def root-update-fn (root-at [:b] update-fn))
   (root-update-fn {:a {:count 0}
                    :b {:count 0}})
   )
