@@ -1,11 +1,14 @@
 (ns flux.core
   (:require [cats.core :as m]
+            [cats.builtin]
             [cats.monad.identity :as id]
             [cats.labs.channel]
             [cljs.core.async :as a]
             [promesa.core :as p]
-            [flux.util :refer [delayed-val]])
-  (:require-macros [cljs.core.async.macros :as a]))
+            [flux.util :refer [delayed-val pipe-trans]]
+            [cats.context :as ctx])
+  (:require-macros [cljs.core.async.macros :as a]
+                   [cats.context :as ctx]))
 
 
 (def store (atom {:listViewA {:page 0 :records []}
@@ -24,40 +27,35 @@
 ;; action returns a loading state
 ;; then returns a state update and disables loading state
 
-;; http://learnyouahaskell.com/a-fistful-of-monads
-;; (<=<) :: (Monad m) => (b -> m c) -> (a -> m b) -> (a -> m c)
-;; f <=< g = (\x -> (g x) >>= f)
-(defn <=< [f g]
-  #(m/bind (g %) f)) ;(comp g f)
-
 
 ;; bind will unwrap the f, return will wrap f with a journal
 ;; So the inner value is the updater-fn
 
 
-(defn root-at [paths f]
-  "Return a new updater-fn that applies f at a path in some bigger context.
+(defn root-at [paths mv]
+  "Return a new updater-fn that applies f at a path.
 If this is monadic, unwrap the updater-fn first, and journal that symbol and path."
-  #(update-in % paths f))
+  (ctx/with-context id/context
+    (m/mlet [v mv]
+      (m/return #(update-in % paths v)))))
 
 
-(def load-records-pending (root-at [:pending] (constantly true)))
-
-(def load-records-success (comp
-                           (root-at [:records] (constantly [1 2 3]))
-                           (root-at [:pending] (constantly false))))
+(def load-records-pending (root-at [:pending] (id/identity (constantly true))))
 
 
-(defn async-component-action []
+;; IFn monoid is composition + identity
+(def load-records-success (m/append
+                           (root-at [:records] (id/identity (constantly [1 2 3])))
+                           (root-at [:pending] (id/identity (constantly false)))))
+
+
+(defn async-component-action [c]
   "put pending update, then async effect, then put success update"
-  (let [c (a/chan)]
-    (a/go
-      (a/>! c load-records-pending)
-      (p/then (delayed-val 42)
-              (fn [response]
-                (a/go (a/>! c load-records-success))))
-      )
-    c))
+  (a/go
+    (a/>! c load-records-pending)
+    (p/then (delayed-val 42)
+            (fn [response]
+              (a/go (a/>! c load-records-success))))))
 
 
 ;; writer monad will journal the symbol 'async-component-action,
@@ -67,37 +65,22 @@ If this is monadic, unwrap the updater-fn first, and journal that symbol and pat
 ;; want to use mappend
 
 
-
-
-
-(comment
-  (def update-fn (root-at [:count] inc))
-  (def root-update-fn (root-at [:b] update-fn))
-  (root-update-fn {:a {:count 0}
-                   :b {:count 0}})
-  )
-
-
-(defn pipe-trans
-  [ci xf]
-  (let [co (a/chan 1 xf)]
-    (a/pipe ci co)
-    co))
-
 (defn consume-updates-forever [action-stream]
   (a/go
     (while true
-      (let [update-fn (a/<! action-stream)]
-        (swap! store update-fn)))))
+      (let [mv (a/<! action-stream)]
+        (m/mlet [v mv]
+          (swap! store v))))))
 
 (comment
-  (def cmp-action-stream (async-component-action))
+  (do
+    (def c (a/chan))
+    (def cmp-action-stream c)
+    (def root-action-stream
+      (pipe-trans cmp-action-stream (map #(root-at [:listViewA] %))))
+    (add-watch store :print (fn [k r old new] (print new)))
+    (consume-updates-forever root-action-stream))
 
-  (def root-action-stream
-    (pipe-trans cmp-action-stream (map (partial refine [:listViewA]))))
-
-  (add-watch store :print (fn [k r old new] (print new)))
-
-  (consume-updates-forever root-action-stream)
+  (async-component-action c)
 
   )
